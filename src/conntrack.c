@@ -93,6 +93,8 @@ static const char *cmmCtRuntimeStateNameValue(int runtime_state)
 		return "installed";
 	case CMM_CT_RUNTIME_REJECTED:
 		return "rejected";
+	case CMM_CT_RUNTIME_DELETE_PENDING:
+		return "delete-pending";
 	case CMM_CT_RUNTIME_FALLBACK:
 	default:
 			return "fallback";
@@ -133,12 +135,36 @@ void cmmCtRuntimeStateSetRejected(struct ctTable *ctEntry, int program_rc)
 	ctEntry->last_program_rc = program_rc;
 }
 
+void cmmCtRuntimeStateSetDeletePending(struct ctTable *ctEntry)
+{
+	if (!ctEntry)
+		return;
+
+	ctEntry->runtime_state = CMM_CT_RUNTIME_DELETE_PENDING;
+}
+
+static int cmmCtHasDeletePendingRoute(const struct ctTable *ctEntry)
+{
+	if (!ctEntry)
+		return 0;
+
+	return ctEntry->orig.delete_pending ||
+		ctEntry->rep.delete_pending ||
+		ctEntry->orig_tunnel.delete_pending ||
+		ctEntry->rep_tunnel.delete_pending;
+}
+
 static void cmmCtRuntimeStateSync(struct ctTable *ctEntry)
 {
 	int expected_dir;
 
 	if (!ctEntry)
 		return;
+
+	if (cmmCtHasDeletePendingRoute(ctEntry)) {
+		cmmCtRuntimeStateSetDeletePending(ctEntry);
+		return;
+	}
 
 	expected_dir = ctEntry->dir & ~ctEntry->dir_filter;
 
@@ -1532,8 +1558,12 @@ static int __cmmFPPRouteRegister(FCI_CLIENT *fci_handle, struct ct_route *rt, co
 	     (rt->fpp_route->mtu != rt->route->mtu) ||
 	     (rt->fpp_route->dst_addr_len != dst_addr_len) ||
 	     (dst_addr_len && memcmp(rt->fpp_route->dst_addr, dst_addr, dst_addr_len)))) {
-		__cmmFPPRouteDeregister(fci_handle, rt->fpp_route, dir);
+		if (__cmmFPPRouteDeregister(fci_handle, rt->fpp_route, dir) < 0) {
+			rt->delete_pending = 1;
+			return -1;
+		}
 		rt->fpp_route = NULL;
+		rt->delete_pending = 0;
 	}
 
 	if (rt->route->flow_flags & FLOWFLAG_FLOATING_TUNNEL)
@@ -2379,7 +2409,12 @@ end:
 
 	cmm_print(DEBUG_ERROR, "%s: CtAdd failed\n", __func__);
 	if (ctEntry->runtime_state != CMM_CT_RUNTIME_REJECTED)
-		cmmCtRuntimeStateSetFallback(ctEntry);
+	{
+		if (cmmCtHasDeletePendingRoute(ctEntry))
+			cmmCtRuntimeStateSetDeletePending(ctEntry);
+		else
+			cmmCtRuntimeStateSetFallback(ctEntry);
+	}
 
 	return -1;
 
@@ -2411,11 +2446,15 @@ void __cmmCtUpdateWithRoute(FCI_CLIENT *fci_handle, struct RtEntry *route)
 		if (ctEntry->orig.route == route)
 		{
 			fpp_route = ctEntry->orig.fpp_route;
+			if (__cmmFPPRouteDeregister(fci_handle, fpp_route, "originator") < 0) {
+				ctEntry->orig.delete_pending = 1;
+				cmmCtRuntimeStateSetDeletePending(ctEntry);
+				continue;
+			}
 			ctEntry->orig.fpp_route = NULL;
+			ctEntry->orig.delete_pending = 0;
 
 			____cmmCtRegister(fci_handle, ctEntry);
-
-			__cmmFPPRouteDeregister(fci_handle, fpp_route, "originator");
 		}
 	}
 
@@ -2427,11 +2466,15 @@ void __cmmCtUpdateWithRoute(FCI_CLIENT *fci_handle, struct RtEntry *route)
 		if (ctEntry->rep.route == route)
 		{
 			fpp_route = ctEntry->rep.fpp_route;
+			if (__cmmFPPRouteDeregister(fci_handle, fpp_route, "replier") < 0) {
+				ctEntry->rep.delete_pending = 1;
+				cmmCtRuntimeStateSetDeletePending(ctEntry);
+				continue;
+			}
 			ctEntry->rep.fpp_route = NULL;
+			ctEntry->rep.delete_pending = 0;
 
 			____cmmCtRegister(fci_handle, ctEntry);
-
-			__cmmFPPRouteDeregister(fci_handle, fpp_route, "replier");
 		}
 	}
 
@@ -2443,11 +2486,15 @@ void __cmmCtUpdateWithRoute(FCI_CLIENT *fci_handle, struct RtEntry *route)
 		if (ctEntry->orig_tunnel.route == route)
 		{
 			fpp_route = ctEntry->orig_tunnel.fpp_route;
+			if (__cmmFPPRouteDeregister(fci_handle, fpp_route, "originator tunnel") < 0) {
+				ctEntry->orig_tunnel.delete_pending = 1;
+				cmmCtRuntimeStateSetDeletePending(ctEntry);
+				continue;
+			}
 			ctEntry->orig_tunnel.fpp_route = NULL;
+			ctEntry->orig_tunnel.delete_pending = 0;
 
 			____cmmCtRegister(fci_handle, ctEntry);
-
-			__cmmFPPRouteDeregister(fci_handle, fpp_route, "originator tunnel");
 		}
         }
 
@@ -2460,11 +2507,15 @@ void __cmmCtUpdateWithRoute(FCI_CLIENT *fci_handle, struct RtEntry *route)
 		if (ctEntry->rep_tunnel.route == route)
 		{
 			fpp_route = ctEntry->rep_tunnel.fpp_route;
+			if (__cmmFPPRouteDeregister(fci_handle, fpp_route, "replier tunnel") < 0) {
+				ctEntry->rep_tunnel.delete_pending = 1;
+				cmmCtRuntimeStateSetDeletePending(ctEntry);
+				continue;
+			}
 			ctEntry->rep_tunnel.fpp_route = NULL;
+			ctEntry->rep_tunnel.delete_pending = 0;
 
 			____cmmCtRegister(fci_handle, ctEntry);
-
-			__cmmFPPRouteDeregister(fci_handle, fpp_route, "replier tunnel");
 		}
 	}
 }
@@ -2606,12 +2657,12 @@ static void __cmmCtUpdate(struct nf_conntrack *ct, struct nfct_handle *handle, s
 *
 *
 ******************************************************************/
-void __cmmFPPRouteDeregister(FCI_CLIENT *fci_handle, struct fpp_rt *fpp_route, const char *dir)
+int __cmmFPPRouteDeregister(FCI_CLIENT *fci_handle, struct fpp_rt *fpp_route, const char *dir)
 {
 	int rc = 0;
 
 	if (!fpp_route)
-		return;
+		return 0;
 
 	cmm_print(DEBUG_INFO, "%s: removing %s route entry\n", __func__, dir);
 
@@ -2622,9 +2673,11 @@ void __cmmFPPRouteDeregister(FCI_CLIENT *fci_handle, struct fpp_rt *fpp_route, c
 
 	/* In case of a deregister error don't free the route entry, we still need to track the fpp state */
 	if (rc < 0)
-		fpp_route->count--;
+		return rc;
 	else
 		__cmmFPPRoutePut(fpp_route);
+
+	return 0;
 }
 
 /*****************************************************************
@@ -2659,12 +2712,16 @@ void ____cmmRouteDeregister(struct RtEntry *route, const char *dir)
 *
 *
 ******************************************************************/
-void __cmmRouteDeregister(FCI_CLIENT *fci_handle, struct ct_route *rt, const char *dir)
+int __cmmRouteDeregister(FCI_CLIENT *fci_handle, struct ct_route *rt, const char *dir)
 {
 	if (rt->fpp_route)
 	{
-		__cmmFPPRouteDeregister(fci_handle, rt->fpp_route, dir);
+		if (__cmmFPPRouteDeregister(fci_handle, rt->fpp_route, dir) < 0) {
+			rt->delete_pending = 1;
+			return -1;
+		}
 		rt->fpp_route = NULL;
+		rt->delete_pending = 0;
 	}
 
 	if (rt->route)
@@ -2676,6 +2733,8 @@ void __cmmRouteDeregister(FCI_CLIENT *fci_handle, struct ct_route *rt, const cha
 	{
 		cmm_print(DEBUG_WARNING, "%s: %s route entry not found\n", __func__, dir);
 	}
+
+	return 0;
 }
 
 /*****************************************************************
@@ -2685,20 +2744,27 @@ void __cmmRouteDeregister(FCI_CLIENT *fci_handle, struct ct_route *rt, const cha
 ******************************************************************/
 int  ____cmmCtLocalDeregister(FCI_CLIENT *fci_handle, FCI_CLIENT *fci_key_handle, struct ctTable *ctEntry)
 {
+	int rc = 0;
+
 	/* As the local route is attached to ctEntry for local connections */
 	__pthread_mutex_lock(&rtMutex);
 	__pthread_mutex_lock(&neighMutex);
 
-	__cmmRouteDeregister(fci_handle, &ctEntry->orig, "originator");
-	__cmmRouteDeregister(fci_handle, &ctEntry->rep, "replier");
+	if (__cmmRouteDeregister(fci_handle, &ctEntry->orig, "originator") < 0)
+		rc = -1;
+	if (__cmmRouteDeregister(fci_handle, &ctEntry->rep, "replier") < 0)
+		rc = -1;
 
-	lro_socket_close(fci_handle, fci_key_handle, ctEntry);
+	if (!rc)
+		lro_socket_close(fci_handle, fci_key_handle, ctEntry);
 
 	__pthread_mutex_unlock(&neighMutex);
 	__pthread_mutex_unlock(&rtMutex);
 
+	if (rc)
+		cmmCtRuntimeStateSetDeletePending(ctEntry);
 
-	return 0;
+	return rc;
 }
 
 /*****************************************************************
@@ -2722,19 +2788,25 @@ int ____cmmCtDeregister(FCI_CLIENT *fci_handle, FCI_CLIENT *fci_key_handle, stru
 	__pthread_mutex_lock(&neighMutex);
 
 	//Try to remove route entries
-	__cmmRouteDeregister(fci_handle, &ctEntry->rep, "replier");
-	__cmmRouteDeregister(fci_handle, &ctEntry->orig, "originator");
+	if (__cmmRouteDeregister(fci_handle, &ctEntry->rep, "replier") < 0)
+		rc = -1;
+	if (__cmmRouteDeregister(fci_handle, &ctEntry->orig, "originator") < 0)
+		rc = -1;
 
 	if (ctEntry->rep_tunnel.route)
 	{
-		__cmmRouteDeregister(fci_handle, &ctEntry->rep_tunnel, "replier tunnel");
-		list_del(&ctEntry->list_by_rep_tunnel_route);
+		if (__cmmRouteDeregister(fci_handle, &ctEntry->rep_tunnel, "replier tunnel") < 0)
+			rc = -1;
+		else
+			list_del(&ctEntry->list_by_rep_tunnel_route);
 	}
 
 	if (ctEntry->orig_tunnel.route)
 	{
-		__cmmRouteDeregister(fci_handle, &ctEntry->orig_tunnel, "originator tunnel");
-		list_del(&ctEntry->list_by_orig_tunnel_route);
+		if (__cmmRouteDeregister(fci_handle, &ctEntry->orig_tunnel, "originator tunnel") < 0)
+			rc = -1;
+		else
+			list_del(&ctEntry->list_by_orig_tunnel_route);
 	}
 
 	__pthread_mutex_unlock(&neighMutex);
@@ -2781,8 +2853,10 @@ int ____cmmCtDeregister(FCI_CLIENT *fci_handle, FCI_CLIENT *fci_key_handle, stru
 ct_remove:
 	if (!rc)
 		__cmmCtRemove(ctEntry);
-	else
+	else {
+		cmmCtRuntimeStateSetDeletePending(ctEntry);
 		cmm_print(DEBUG_ERROR, "%s: DeRegister failed\n", __func__);
+	}
 
 	return rc;
 }

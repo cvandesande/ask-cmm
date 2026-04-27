@@ -34,6 +34,7 @@
 		CMM_CT_RUNTIME_FALLBACK = 0,
 		CMM_CT_RUNTIME_INSTALLED,
 		CMM_CT_RUNTIME_REJECTED,
+		CMM_CT_RUNTIME_DELETE_PENDING,
 	};
 
 	struct ctTable
@@ -170,15 +171,16 @@
 	void cmmCtRuntimeStateSetFallback(struct ctTable *ctEntry);
 	void cmmCtRuntimeStateSetInstalled(struct ctTable *ctEntry);
 	void cmmCtRuntimeStateSetRejected(struct ctTable *ctEntry, int program_rc);
+	void cmmCtRuntimeStateSetDeletePending(struct ctTable *ctEntry);
 
 	u_int64_t cmmQosmarkGet(struct nf_conntrack *ct);
 	void cmmQosmarkSet(struct nf_conntrack *ct, u_int64_t qosmark);
 
 	struct ctTable *__cmmCtFind(struct nf_conntrack *ctTemp);
 	void __cmmNeighDeregister(FCI_CLIENT *fci_handle, struct NeighborEntry *neigh, const char *dir);
-	void __cmmRouteDeregister(FCI_CLIENT *fci_handle, struct ct_route *rt, const char *dir);
+	int __cmmRouteDeregister(FCI_CLIENT *fci_handle, struct ct_route *rt, const char *dir);
 	void ____cmmRouteDeregister(struct RtEntry *route, const char *dir);
-	void __cmmFPPRouteDeregister(FCI_CLIENT *fci_handle, struct fpp_rt *fpp_route, const char *dir);
+	int __cmmFPPRouteDeregister(FCI_CLIENT *fci_handle, struct fpp_rt *fpp_route, const char *dir);
 	void __cmmCheckFPPRouteIdUpdate(struct ct_route *rt, int *flags);
 	void __cmmCtRemove(struct ctTable *ctEntry);
 	int ____cmmCtDeregister(FCI_CLIENT *fci_handle, FCI_CLIENT *fci_key_handle, struct ctTable *ctEntry);

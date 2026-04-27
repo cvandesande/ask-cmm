@@ -93,6 +93,7 @@
 		struct RtEntry	*route;
 		struct fpp_rt	*fpp_route;
 		int		fpp_route_id;
+		int		delete_pending;
 	};
 
 	struct flow {

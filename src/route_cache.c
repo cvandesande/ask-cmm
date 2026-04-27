@@ -654,13 +654,30 @@ int cmmRtShow(struct cli_def * cli, const char *command, char *argv[], int argc)
 static void __cmmCtTunnelRouteUpdate(FCI_CLIENT *fci_handle, struct ctTable *ctEntry, struct RtEntry *route, int dir)
 {
 	struct ct_route rt;
+	struct ct_route *ct_rt;
+	const char *dir_name;
 
 	cmm_print(DEBUG_INFO, "%s\n", __func__);
 
-	if (dir == ORIGINATOR)
+	if (dir == ORIGINATOR) {
 		rt = ctEntry->orig_tunnel;
-	else
+		ct_rt = &ctEntry->orig_tunnel;
+		dir_name = "originator tunnel";
+	} else {
 		rt = ctEntry->rep_tunnel;
+		ct_rt = &ctEntry->rep_tunnel;
+		dir_name = "replier tunnel";
+	}
+
+	if (!(route->flags & INVALID))
+		rt.route = NULL;
+
+	if ((rt.fpp_route || rt.route) &&
+	    __cmmRouteDeregister(fci_handle, &rt, dir_name) < 0) {
+		ct_rt->delete_pending = 1;
+		cmmCtRuntimeStateSetDeletePending(ctEntry);
+		return;
+	}
 
 	if (route->flags & INVALID)
 	{
@@ -668,6 +685,7 @@ static void __cmmCtTunnelRouteUpdate(FCI_CLIENT *fci_handle, struct ctTable *ctE
 		{
 			ctEntry->orig_tunnel.route = NULL;
 			ctEntry->orig_tunnel.fpp_route = NULL;
+			ctEntry->orig_tunnel.delete_pending = 0;
 
 			list_del(&ctEntry->list_by_orig_tunnel_route);
 		}
@@ -675,26 +693,23 @@ static void __cmmCtTunnelRouteUpdate(FCI_CLIENT *fci_handle, struct ctTable *ctE
 		{
 			ctEntry->rep_tunnel.route = NULL;
 			ctEntry->rep_tunnel.fpp_route = NULL;
+			ctEntry->rep_tunnel.delete_pending = 0;
 
 			list_del(&ctEntry->list_by_rep_tunnel_route);
 		}
 	}
 	else
 	{
-		rt.route = NULL;
-
-		if (dir == ORIGINATOR)
+		if (dir == ORIGINATOR) {
 			ctEntry->orig_tunnel.fpp_route = NULL;
-		else
+			ctEntry->orig_tunnel.delete_pending = 0;
+		} else {
 			ctEntry->rep_tunnel.fpp_route = NULL;
+			ctEntry->rep_tunnel.delete_pending = 0;
+		}
 	}
 
 	____cmmCtRegister(fci_handle, ctEntry);
-
-	if (dir == ORIGINATOR)
-	 	__cmmRouteDeregister(fci_handle, &rt, "originator tunnel");
-	else
-		__cmmRouteDeregister(fci_handle, &rt, "replier tunnel");
 }
 
 /*****************************************************************
@@ -706,6 +721,10 @@ static void __cmmCtRouteUpdate(FCI_CLIENT *fci_handle, struct ctTable *ctEntry, 
 {
 	struct ct_route rt;
 	struct ct_route tunnel_rt;
+	struct ct_route *ct_rt;
+	const char *dir_name;
+	const char *tunnel_dir_name;
+	int tunnel_route_linked = 0;
 
 	cmm_print(DEBUG_INFO, "%s\n", __func__);
 
@@ -713,25 +732,59 @@ static void __cmmCtRouteUpdate(FCI_CLIENT *fci_handle, struct ctTable *ctEntry, 
 	{
 		rt = ctEntry->orig;
 		tunnel_rt = ctEntry->orig_tunnel;
+		ct_rt = &ctEntry->orig;
+		dir_name = "originator";
+		tunnel_dir_name = "originator tunnel";
 
-		if (ctEntry->orig_tunnel.route)
+		tunnel_route_linked = ctEntry->orig_tunnel.route != NULL;
+		if (ctEntry->orig_tunnel.route || ctEntry->orig_tunnel.fpp_route)
 		{
+			if (__cmmRouteDeregister(fci_handle, &tunnel_rt, tunnel_dir_name) < 0) {
+				ctEntry->orig_tunnel.delete_pending = 1;
+				cmmCtRuntimeStateSetDeletePending(ctEntry);
+				return;
+			}
+
 			ctEntry->orig_tunnel.route = NULL;
 			ctEntry->orig_tunnel.fpp_route = NULL;
-			list_del(&ctEntry->list_by_orig_tunnel_route);
+			ctEntry->orig_tunnel.delete_pending = 0;
+			if (tunnel_route_linked)
+				list_del(&ctEntry->list_by_orig_tunnel_route);
 		}
 	}
 	else
 	{
 		rt = ctEntry->rep;
 		tunnel_rt = ctEntry->rep_tunnel;
+		ct_rt = &ctEntry->rep;
+		dir_name = "replier";
+		tunnel_dir_name = "replier tunnel";
 
-		if (ctEntry->rep_tunnel.route)
+		tunnel_route_linked = ctEntry->rep_tunnel.route != NULL;
+		if (ctEntry->rep_tunnel.route || ctEntry->rep_tunnel.fpp_route)
 		{			
+			if (__cmmRouteDeregister(fci_handle, &tunnel_rt, tunnel_dir_name) < 0) {
+				ctEntry->rep_tunnel.delete_pending = 1;
+				cmmCtRuntimeStateSetDeletePending(ctEntry);
+				return;
+			}
+
 			ctEntry->rep_tunnel.route = NULL;
 			ctEntry->rep_tunnel.fpp_route = NULL;
-			list_del(&ctEntry->list_by_rep_tunnel_route);
+			ctEntry->rep_tunnel.delete_pending = 0;
+			if (tunnel_route_linked)
+				list_del(&ctEntry->list_by_rep_tunnel_route);
 		}
+	}
+
+	if (!(route->flags & INVALID))
+		rt.route = NULL;
+
+	if ((rt.fpp_route || rt.route) &&
+	    __cmmRouteDeregister(fci_handle, &rt, dir_name) < 0) {
+		ct_rt->delete_pending = 1;
+		cmmCtRuntimeStateSetDeletePending(ctEntry);
+		return;
 	}
 
 	if (route->flags & INVALID)
@@ -740,35 +793,27 @@ static void __cmmCtRouteUpdate(FCI_CLIENT *fci_handle, struct ctTable *ctEntry, 
 		{
 			ctEntry->orig.route = NULL;
 			ctEntry->orig.fpp_route = NULL;
+			ctEntry->orig.delete_pending = 0;
 		}
 		else
 		{
 			ctEntry->rep.route = NULL;
 			ctEntry->rep.fpp_route = NULL;
+			ctEntry->rep.delete_pending = 0;
 		}
 	}
 	else
 	{
-		rt.route = NULL;
-
-		if (dir == ORIGINATOR)
+		if (dir == ORIGINATOR) {
 			ctEntry->orig.fpp_route = NULL;
-		else
+			ctEntry->orig.delete_pending = 0;
+		} else {
 			ctEntry->rep.fpp_route = NULL;
+			ctEntry->rep.delete_pending = 0;
+		}
 	}
 
 	____cmmCtRegister(fci_handle, ctEntry);
-
-	if (dir == ORIGINATOR)
-	{
-		__cmmRouteDeregister(fci_handle, &rt, "originator");
-		__cmmRouteDeregister(fci_handle, &tunnel_rt, "originator tunnel");
-	}
-	else
-	{
-		__cmmRouteDeregister(fci_handle, &rt, "replier");
-		__cmmRouteDeregister(fci_handle, &tunnel_rt, "replier tunnel");
-	}
 }
 
 /*****************************************************************
