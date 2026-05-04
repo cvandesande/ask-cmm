@@ -1537,6 +1537,14 @@ static int __cmmFPPRouteRegister(FCI_CLIENT *fci_handle, struct ct_route *rt, co
 #endif
 		iifindex = rt->route->iifindex;
 
+#if defined(LS1043)
+	/* Native IPsec CT entries are classified after SEC on a hardware path;
+	 * avoid programming CDX with transient logical ingress ifindices. */
+	if ((rt->route->flow_flags & FLOWFLAG_IPSEC_CT) &&
+	    rt->route->underlying_iifindex)
+		iifindex = rt->route->underlying_iifindex;
+#endif
+
 	if (rt->route->flow_flags & FLOWFLAG_FLOATING_TUNNEL) {
 		dst_addr = rt->route->dAddr;
 		dst_addr_len = IPADDRLEN(rt->route->family);
@@ -1779,6 +1787,33 @@ void __cmmCheckFPPRouteIdUpdate(struct ct_route *rt, int *flags)
 	}
 }
 
+static int __cmmCtHasIPsecSA(const struct ctTable *ctEntry)
+{
+#ifndef IPSEC_FLOW_CACHE
+	return ctEntry->fEntryOrigFwdSA || ctEntry->fEntryOrigOutSA ||
+	       ctEntry->fEntryRepFwdSA || ctEntry->fEntryRepOutSA;
+#else
+	return 0;
+#endif
+}
+
+static int __cmmCtRouteUpdate(FCI_CLIENT *fci_handle,
+			      const struct ctTable *ctEntry,
+			      struct fpp_rt *fpp_route)
+{
+	if (!fpp_route)
+		return -1;
+
+	if (!__cmmCtHasIPsecSA(ctEntry))
+		return cmmFeRouteUpdate(fci_handle, ADD | UPDATE, fpp_route);
+
+	if (!(fpp_route->flags & FPP_PROGRAMMED) ||
+	    (fpp_route->flags & FPP_NEEDS_UPDATE))
+		return cmmFeRouteUpdate(fci_handle, ADD | UPDATE, fpp_route);
+
+	return __cmmFeRouteUpdate(fci_handle, FPP_ACTION_REGISTER, fpp_route);
+}
+
 /*****************************************************************
 * ____cmmCtLocalRegister
 *
@@ -1800,6 +1835,27 @@ int ____cmmCtLocalRegister(FCI_CLIENT *fci_handle, struct ctTable* ctEntry)
    if there is a matching SA for given SA_INFO, that SA pointer gets
    filled in fEntrySA
 */
+static void __cmm_ct_detach_SA(struct ctTable *ctEntry,
+						struct SATable **fEntrySA,
+						int replier_f)
+{
+	struct SATable *sa_entry = *fEntrySA;
+	struct list_head *list_node;
+	int list_index;
+
+	if (!sa_entry)
+		return;
+
+	list_index = replier_f * 2;
+	if (!(sa_entry->SAInfo.id.flags & NLKEY_SAFLAGS_INBOUND))
+		list_index ++;
+
+	list_node = &ctEntry->list_by_sa[list_index];
+	list_del(list_node);
+	*fEntrySA = NULL;
+	ctEntry->flags |= FPP_NEEDS_UPDATE;
+}
+
 static void __cmm_ct_get_SA(struct ctTable *ctEntry,
 						unsigned short *xfrm_handle,
 						struct SATable **fEntrySA,
@@ -1824,6 +1880,7 @@ static void __cmm_ct_get_SA(struct ctTable *ctEntry,
 			list_index ++;
 		list_node = &ctEntry->list_by_sa[list_index];
 		list_del(list_node);
+		ctEntry->flags |= FPP_NEEDS_UPDATE;
 		cmm_print(DEBUG_INFO,"%s(%d) XFRM SPI of existing sagd %x, sagd %x, list_node %p , index %d\n",
 			__FUNCTION__,__LINE__,sa_entry->SAInfo.sagd, *xfrm_handle, list_node, list_index);
 	}
@@ -1856,6 +1913,7 @@ static void __cmm_ct_get_SA(struct ctTable *ctEntry,
 		(sa_entry->SAInfo.id.flags & NLKEY_SAFLAGS_INBOUND) ? "Inbound" : "Outbound",
 		 list_node, list_index);
 	list_add(&sa_entry->ctentry_list[replier_f], list_node);
+	ctEntry->flags |= FPP_NEEDS_UPDATE;
 	*fEntrySA = sa_entry;
 	return;
 }
@@ -1880,6 +1938,10 @@ static void __cmm_ct_fill_orig_repl_SAs(struct ctTable *ctEntry,
 			(*fEntryFwdSA) ? (*fEntryFwdSA)->SAInfo.sagd : 0,
 			(*fEntryFwdSA) ? (*fEntryFwdSA)->SAInfo.id.spi : 0);
 	}	
+	else
+	{
+		__cmm_ct_detach_SA(ctEntry, fEntryFwdSA, replier_f);
+	}
 
 	/* filling OUT SA info */
 	if (xfrm_handle[MAX_SAs_INFO_PER_DIR_IN_NL_MSG])
@@ -1892,6 +1954,10 @@ static void __cmm_ct_fill_orig_repl_SAs(struct ctTable *ctEntry,
 			(*fEntryOutSA)? (*fEntryOutSA)->SAInfo.sagd : 0,
 			(*fEntryOutSA)? (*fEntryOutSA)->SAInfo.id.spi : 0);
 	}	
+	else
+	{
+		__cmm_ct_detach_SA(ctEntry, fEntryOutSA, replier_f);
+	}
 
 	return;
 }
@@ -2152,6 +2218,8 @@ int ____cmmCtRegister(FCI_CLIENT *fci_handle, struct ctTable *ctEntry)
 #endif
 		flow.fwmark = nfct_get_attr_u32(ct, ATTR_ORIG_COMCERTO_FP_MARK);
 		flow.flow_flags = 0;
+		if (ctEntry->fEntryOrigFwdSA || ctEntry->fEntryOrigOutSA)
+			flow.flow_flags |= FLOWFLAG_IPSEC_CT;
 
 #ifdef IPSEC_FLOW_CACHE
 		if (ctEntry->fEntryOrigOut && ctEntry->fEntryOrigOut->ignore_neigh)
@@ -2282,6 +2350,8 @@ replier:
 #endif
 		flow.fwmark = nfct_get_attr_u32(ct, ATTR_REPL_COMCERTO_FP_MARK);
 		flow.flow_flags = 0;
+		if (ctEntry->fEntryRepFwdSA || ctEntry->fEntryRepOutSA)
+			flow.flow_flags |= FLOWFLAG_IPSEC_CT;
 
 #ifdef IPSEC_FLOW_CACHE
 		if (ctEntry->fEntryRepOut && ctEntry->fEntryRepOut->ignore_neigh)
@@ -2330,7 +2400,7 @@ replier:
 program:
 	if (dir & ORIGINATOR)
 	{
-		rc = cmmFeRouteUpdate(fci_handle, ADD | UPDATE, ctEntry->orig.fpp_route);
+		rc = __cmmCtRouteUpdate(fci_handle, ctEntry, ctEntry->orig.fpp_route);
 		if (rc < 0)
 		{
 			dir &= ~ORIGINATOR;
@@ -2339,7 +2409,7 @@ program:
 
 		if (ctEntry->orig_tunnel.fpp_route)
 		{
-			rc = cmmFeRouteUpdate(fci_handle, ADD | UPDATE, ctEntry->orig_tunnel.fpp_route);
+			rc = __cmmCtRouteUpdate(fci_handle, ctEntry, ctEntry->orig_tunnel.fpp_route);
 			if (rc < 0)
 			{
 				dir &= ~ORIGINATOR;
@@ -2352,7 +2422,7 @@ program_replier:
 
 	if (dir & REPLIER)
 	{
-		rc = cmmFeRouteUpdate(fci_handle, ADD | UPDATE, ctEntry->rep.fpp_route);
+		rc = __cmmCtRouteUpdate(fci_handle, ctEntry, ctEntry->rep.fpp_route);
 		if (rc < 0)
 		{
 			dir &= ~REPLIER;
@@ -2361,7 +2431,7 @@ program_replier:
 
 		if (ctEntry->rep_tunnel.fpp_route)
 		{
-			rc = cmmFeRouteUpdate(fci_handle, ADD | UPDATE, ctEntry->rep_tunnel.fpp_route);
+			rc = __cmmCtRouteUpdate(fci_handle, ctEntry, ctEntry->rep_tunnel.fpp_route);
 			if (rc < 0)
 			{
 				dir &= ~REPLIER;
@@ -2957,6 +3027,10 @@ static int cmmCtCheckCtCb(enum nf_conntrack_msg_type type,
 	if((nfct_get_attr_u32(ct, ATTR_ID) != nfct_get_attr_u32(ct_local, ATTR_ID))
 	|| __cmmCtIsInv(ct, ct_local))
 		cb_status = -1;
+	else
+		/* Keep CMM's event object aligned with the kernel object,
+		 * including ASK/XFRM metadata filled after the original event. */
+		nfct_copy(ct_local, ct, NFCT_CP_OVERRIDE);
 
 	return NFCT_CB_CONTINUE;
 }
@@ -2967,6 +3041,7 @@ static int cmmCheckUpdateEvent(struct nfct_handle *handle, struct nf_conntrack *
 
 	cb_data = ct;
 
+	cb_status = -1;
 	if (nfct_query(handle, NFCT_Q_GET, (void*)ct) < 0) {
 		if (errno == ENOENT) {
 			rc = -1;
@@ -3193,6 +3268,16 @@ static int __cmmCtCatch(struct cmm_ct *ctx, enum nf_conntrack_msg_type type, str
 		case NFCT_T_NEW:
 		case NFCT_T_UPDATE:
 			status = nfct_get_attr_u32(ct, ATTR_STATUS);
+
+			if (nfct_attr_is_set(ct, ATTR_TCP_STATE)) {
+				state = nfct_get_attr_u8(ct, ATTR_TCP_STATE);
+				if ((state == TCP_CONNTRACK_ESTABLISHED) &&
+				    (status & IPS_ASSURED)) {
+					if (cmmCheckUpdateEvent(ctx->get_handle, ct) < 0)
+						goto exit;
+					status = nfct_get_attr_u32(ct, ATTR_STATUS);
+				}
+			}
 
 			ctEntry = __cmmCtFind(ct);
 

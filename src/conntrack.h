@@ -134,6 +134,7 @@
 	#define FLOWFLAG_SOCKET_ROUTE		(1 << 2)
 	#define FLOWFLAG_LOCAL			(1 << 3)
 	#define FLOWFLAG_SA_ROUTE		(1 << 4)
+	#define FLOWFLAG_IPSEC_CT		(1 << 5)
 
 #ifdef VLAN_FILTER
 	/* vlan filtering flags on a route*/

@@ -26,6 +26,27 @@ static u_int32_t route_id = 0;
 pthread_mutex_t rtMutex = PTHREAD_MUTEX_INITIALIZER;		/*mutex to prevent race condition on the route table*/
 extern unsigned short TunMtu;
 
+static int cmmRouteFlowHasDst(const char *func, struct flow *flow)
+{
+	if (!flow) {
+		cmm_print(DEBUG_ERROR, "%s: null route flow\n", func);
+		return 0;
+	}
+
+	if (flow->family != AF_INET && flow->family != AF_INET6) {
+		cmm_print(DEBUG_ERROR, "%s: invalid route family %d\n",
+				func, flow->family);
+		return 0;
+	}
+
+	if (!flow->dAddr) {
+		cmm_print(DEBUG_ERROR, "%s: route flow missing destination address\n", func);
+		return 0;
+	}
+
+	return 1;
+}
+
 static int cmmRouteNetlinkLookupFilter(const struct sockaddr_nl *nladdr, struct nlmsghdr *nlh, void *arg)
 {
 	struct RtEntry *route = arg;
@@ -82,6 +103,12 @@ static int cmmRouteNetlinkLookupFilter(const struct sockaddr_nl *nladdr, struct 
 
 	route->oifindex = *(int *)RTA_DATA(attr[RTA_OIF]);
 
+	if (!route->mtu) {
+		int if_mtu = __itf_get_mtu(route->oifindex);
+		if (if_mtu > 0)
+			route->mtu = if_mtu;
+	}
+
 	/* Always stop parsing on first match */
 	return RTNL_CB_STOP;
 
@@ -92,7 +119,7 @@ err:
 static int cmmRouteNetlinkLookup(struct flow *flow, struct RtEntry *route)
 {
 	struct rtnl_handle rth;
-	int ipAddrLen = IPADDRLEN(flow->family);
+	int ipAddrLen;
 	char iifname[IFNAMSIZ], oifname[IFNAMSIZ];
 	char buf1[INET6_ADDRSTRLEN], buf2[INET6_ADDRSTRLEN], buf3[INET6_ADDRSTRLEN];
 	char buf[256] __attribute__ ((aligned (4)));
@@ -100,6 +127,11 @@ static int cmmRouteNetlinkLookup(struct flow *flow, struct RtEntry *route)
 	struct rtmsg *rtm;
 
 	cmm_print(DEBUG_INFO, "%s\n", __func__);
+
+	if (!cmmRouteFlowHasDst(__func__, flow))
+		goto err0;
+
+	ipAddrLen = IPADDRLEN(flow->family);
 
 	if (cmm_rtnl_open(&rth, 0) < 0) {
 		cmm_print(DEBUG_ERROR, "%s::%d: cmm_rtnl_open() failed, %s\n", __func__, __LINE__, strerror(errno));
@@ -188,10 +220,15 @@ struct RtEntry *__cmmRouteFind(struct flow *flow)
 	struct list_head *entry;
 	char sbuf[INET6_ADDRSTRLEN], dbuf[INET6_ADDRSTRLEN];
 	int key;
-	int ipAddrLen = IPADDRLEN(flow->family);
+	int ipAddrLen;
 
-	cmm_print(DEBUG_INFO, "%s: Route(%s, %s)\n", __func__, inet_ntop(flow->family, flow->sAddr, sbuf, sizeof(sbuf)),
+	if (!cmmRouteFlowHasDst(__func__, flow))
+		return NULL;
+
+	cmm_print(DEBUG_INFO, "%s: Route(%s, %s)\n", __func__, flow->sAddr ? inet_ntop(flow->family, flow->sAddr, sbuf, sizeof(sbuf)) : "(any)",
 								inet_ntop(flow->family, flow->dAddr, dbuf, sizeof(dbuf)));
+
+	ipAddrLen = IPADDRLEN(flow->family);
 
 	key = HASH_RT(flow->family, flow->sAddr, flow->dAddr);
 
@@ -304,6 +341,9 @@ struct RtEntry *__cmmRouteAdd(struct flow *flow)
 	struct interface *itf = NULL;
 #endif
 
+	if (!cmmRouteFlowHasDst(__func__, flow))
+		goto err0;
+
 	route = malloc(sizeof(struct RtEntry));
 	if (!route)
 	{
@@ -356,6 +396,9 @@ err0:
 struct RtEntry *__cmmRouteGet(struct flow *flow)
 {
 	struct RtEntry *route;
+
+	if (!cmmRouteFlowHasDst(__func__, flow))
+		goto err;
 
 	route = __cmmRouteFind(flow);
 	if (!route)

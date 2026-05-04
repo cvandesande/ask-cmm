@@ -140,7 +140,10 @@
 	struct ctTable;
 	void __cmmRouteLocalNew(FCI_CLIENT *fci_handle, struct ctTable* localctEntry);
 
-#define cmmRouteEqual(route, flow, len) (!memcmp((route)->sAddr, (flow)->sAddr, (len)) && !memcmp((route)->dAddr, (flow)->dAddr, (len)) && ((route)->fwmark == (flow)->fwmark) && ((route)->iifindex == (flow)->iifindex))
+#define cmmRouteEqual(route, flow, len) \
+	(((flow)->sAddr ? !memcmp((route)->sAddr, (flow)->sAddr, (len)) : !(route)->sAddrLen) && \
+	 (flow)->dAddr && !memcmp((route)->dAddr, (flow)->dAddr, (len)) && \
+	 ((route)->fwmark == (flow)->fwmark) && ((route)->iifindex == (flow)->iifindex))
 
 static inline int cmmPrefixEqual(const u_int32_t *daddr1, const u_int32_t *daddr2, int lenbits)
 {
@@ -162,16 +165,22 @@ static inline u_int32_t HASH_RT(int family, const unsigned int *sAddr, const uns
 {
 	u_int32_t key1, key2;
 
+	if (!dAddr)
+		return 0;
+
 	if (family == AF_INET)
 	{
-		key1 = sAddr[0];
+		key1 = sAddr ? sAddr[0] : 0;
 		key2 = dAddr[0];
 
 		return (jhash_2words(key2, key1, 0x12563478) & (ROUTE_HASH_TABLE_SIZE - 1));
 	}
 	else
 	{
-		key1 = sAddr[0] ^ sAddr[1] ^ sAddr[2] ^ sAddr[3];
+		if (sAddr)
+			key1 = sAddr[0] ^ sAddr[1] ^ sAddr[2] ^ sAddr[3];
+		else
+			key1 = 0;
 		key2 = dAddr[0] ^ dAddr[1] ^ dAddr[2] ^ dAddr[3];
 
 		return (jhash_2words(key2, key1, 0x12563478) & (ROUTE_HASH_TABLE_SIZE - 1)) + ROUTE_HASH_TABLE_SIZE;
