@@ -33,6 +33,13 @@ int dumpmem(int argc, char *argv[]);
 #define ERR_CODE_PREFIX_LENGTH (8) /* FPP_ERR_ */
 #endif
 
+#ifdef NEW_IPC
+#define CMM_COMMAND_TEXT_HDR_SIZE \
+	(sizeof(cmm_command_t) - sizeof(((cmm_command_t *)0)->msg_type) - sizeof(((cmm_command_t *)0)->buf))
+#define CMM_RESPONSE_TEXT_HDR_SIZE \
+	(sizeof(cmm_response_t) - sizeof(((cmm_response_t *)0)->msg_type) - sizeof(((cmm_response_t *)0)->buf))
+#endif
+
 char * getErrorString(unsigned short error)
 {
 	switch (error)
@@ -320,9 +327,14 @@ int cmmSendToDaemon(daemon_handle_t handle, unsigned short commandCode, void * d
 	cmm_command_t cmd;
 	cmm_response_t res;
 
+	if (dataSize < 0 || dataSize > CMM_BUF_SIZE || (dataSize && !dataToSend)) {
+		errno = EMSGSIZE;
+		return -1;
+	}
 	cmd.func = commandCode;
 	cmd.length = dataSize;
-	memcpy(cmd.buf, dataToSend, dataSize);
+	if (dataSize)
+		memcpy(cmd.buf, dataToSend, dataSize);
 
 	if(cmm_send(handle, &cmd, 0) < 0)
 	{
@@ -1051,12 +1063,32 @@ static void *cmmDaemonThread(void *data)
 		/* msgrcv expects msgsz as the length after msg_type. Keep the
 		 * receive return code so EINTR can be retried cleanly.
 		 */
-		dataSize = msgrcv(ctx->queueIdRx, &cmd, (sizeof(cmd) - sizeof(cmd.msg_type)), 0, 0);
+		dataSize = msgrcv(ctx->queueIdRx, &cmd,
+				(sizeof(cmd) - sizeof(cmd.msg_type)),
+				0, MSG_NOERROR);
 		if (dataSize >= 0) {
 			res.msg_type = cmd.msg_type;
+			func = cmd.func;
+
+			if (dataSize < CMM_COMMAND_TEXT_HDR_SIZE) {
+				cmm_print(DEBUG_ERROR, "%s: command message too short(%d)\n",
+					__func__, dataSize);
+				rc = -1;
+				dataRcvSize = 0;
+				goto answer;
+			}
+
+			if (cmd.length > CMM_BUF_SIZE ||
+			    cmd.length > dataSize - CMM_COMMAND_TEXT_HDR_SIZE) {
+				cmm_print(DEBUG_ERROR, "%s: invalid command payload length(%u/%d)\n",
+					__func__, cmd.length, dataSize);
+				rc = -1;
+				dataRcvSize = 0;
+				goto answer;
+			}
+
 			dataSize = cmd.length;
 			dataRcvSize = sizeof(res.buf);
-			func = cmd.func;
 			rx_buf = cmd.buf;
 			tx_buf = res.buf;
 		}
@@ -1078,9 +1110,7 @@ static void *cmmDaemonThread(void *data)
 
 			// If we have an error receiving a msg, do nothing and continue waiting for a new one
 			cmm_print(DEBUG_WARNING, "%s: msgrcv() failed, %s\n", __func__, strerror(errno));
-			rc = -1;
-			dataRcvSize = 0;
-			goto answer;
+			continue;
 		}
 
 		if (dataSize > CMM_BUF_SIZE) { 
@@ -1147,7 +1177,8 @@ answer:
 		}
 
 		res.length = dataRcvSize;
-		if (msgsnd(ctx->queueIdTx, &res, sizeof(res) - sizeof(res.buf) + res.length, 0) < 0)
+		if (msgsnd(ctx->queueIdTx, &res,
+				CMM_RESPONSE_TEXT_HDR_SIZE + res.length, 0) < 0)
 #else
 		if (msgsnd(ctx->queueIdTx, &msg, dataRcvSize, 0) < 0)
 #endif
