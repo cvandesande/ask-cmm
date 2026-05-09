@@ -178,7 +178,7 @@ static inline char *get_port_name(int port_id, char *buf, int buf_size)
 #define ITF_L2TP	(1 << 8)
 #define ITF_LRO		(1 << 9)
 
-#ifndef SAM_LEGACY
+#if defined(CMM_4RD_SUPPORT) && !defined(SAM_LEGACY)
 
 struct ip6_4rd_map_msg {
 	__u32 reset;
@@ -299,9 +299,9 @@ struct interface {
 #endif
 #ifdef SAM_LEGACY
 	u_int16_t sam_enable;
-#else
+#elif defined(CMM_4RD_SUPPORT)
 	struct list_head mr_list; /* netlink mapping rule information */
-#endif
+#endif /* SAM_LEGACY */
 	/* If L2TP interface */
 	struct l2tp_itf_info l2tp;
 

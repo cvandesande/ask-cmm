@@ -23,7 +23,7 @@ the tunnel interface MTU is configured as 1500(instead of the real 1460 (1500 - 
 Bytes in order to force IPv6 fragmentation */
 #endif
 
-#ifndef SAM_LEGACY
+#if defined(CMM_4RD_SUPPORT) && !defined(SAM_LEGACY)
 struct map_rule {
 	struct list_head list;
 	struct ip6_4rd_map_msg rule;
@@ -69,4 +69,3 @@ int cmm4rdIdConvSetProcess(char ** keywords, int tabStart, int argc, daemon_hand
 int getTunnel4rdAddress(struct interface* itf, u_int32_t * Daddrv6,  unsigned int Daddr, unsigned short Dport);
 
 #endif /* __MODULE_TUNNEL_H__ */
-

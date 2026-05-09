@@ -1642,7 +1642,15 @@ found:
 }
 
 
-#ifdef SAM_LEGACY
+#if !defined(CMM_4RD_SUPPORT)
+int cmm4rdIdConvSetProcess(char ** keywords, int tabStart, int argc, daemon_handle_t daemon_handle)
+{
+	(void)keywords; (void)tabStart; (void)argc; (void)daemon_handle;
+
+	cmm_print(DEBUG_STDOUT,"\t4RD support is disabled in this build\n");
+	return -1;
+}
+#elif defined(SAM_LEGACY)
 
 int cmm4rdIdConvSetProcess(char ** keywords, int tabStart, int argc, daemon_handle_t daemon_handle)
 {
@@ -1773,7 +1781,14 @@ int cmmTnlQueryProcess(char ** keywords, int tabStart, daemon_handle_t daemon_ha
         return CLI_OK;
 }
 
-#ifdef SAM_LEGACY
+#if !defined(CMM_4RD_SUPPORT)
+int getTunnel4rdAddress(struct interface* itf, u_int32_t * Daddrv6,  unsigned int Daddr, unsigned short Dport)
+{
+       (void)Daddr; (void)Dport;
+       memcpy(Daddrv6, itf->tunnel_parm6.raddr.s6_addr32, 16);
+       return 0;
+}
+#elif defined(SAM_LEGACY)
 
 int getTunnel4rdAddress(struct interface* itf, u_int32_t * Daddrv6,  unsigned int Daddr, unsigned short Dport)
 {

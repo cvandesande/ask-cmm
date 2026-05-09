@@ -28,10 +28,12 @@
 
 /* 4RD (IPv4 Residual Deployment) netlink constants - NXP ASK extension.
  * These are defined in the ASK-patched kernel but not in glibc headers. */
+#ifdef CMM_4RD_SUPPORT
 #ifndef RTM_NEW4RD
 #define RTM_NEW4RD	97
 #define RTM_DEL4RD	98
 #define RTM_GET4RD	99
+#endif
 #endif
 #include "itf.h"
 #include "pppoe.h"
@@ -217,7 +219,7 @@ found:
 	return addr;
 }
 
-#ifndef SAM_LEGACY
+#if defined(CMM_4RD_SUPPORT) && !defined(SAM_LEGACY)
 static struct map_rule * mr_add(struct interface *itf)
 {
        struct map_rule *mr;
@@ -556,7 +558,7 @@ static void __itf_remove(struct interface *itf)
 {
 	struct interface_addr *addr;
 	struct list_head *entry, *next_entry;
-#ifndef SAM_LEGACY
+#if defined(CMM_4RD_SUPPORT) && !defined(SAM_LEGACY)
 	struct map_rule *mr;
 #endif
 
@@ -567,7 +569,7 @@ static void __itf_remove(struct interface *itf)
 		addr = container_of(entry, struct interface_addr, list);
 		__addr_remove(addr);
 	}
-#ifndef SAM_LEGACY
+#if defined(CMM_4RD_SUPPORT) && !defined(SAM_LEGACY)
        for (entry = list_first(&itf->mr_list); next_entry = list_next(entry), entry != &itf->mr_list; entry = next_entry)
        {
 	       mr = container_of(entry, struct map_rule, list);
@@ -759,7 +761,7 @@ static struct interface *__itf_add(struct interface_table *ctx, int ifindex)
 	itf->count = 0;
 
 	list_head_init(&itf->addr_list);
-#ifndef SAM_LEGACY
+#if defined(CMM_4RD_SUPPORT) && !defined(SAM_LEGACY)
 	list_head_init(&itf->mr_list);
 #endif
 #ifdef VLAN_FILTER
@@ -782,7 +784,7 @@ err:
 	return NULL;
 }
 
-#ifndef SAM_LEGACY
+#if defined(CMM_4RD_SUPPORT) && !defined(SAM_LEGACY)
 static int __cmmGetMappingRuleFilter(const struct sockaddr_nl *nladdr, struct nlmsghdr *nlh, void *arg)
 {
 	struct interface_table *ctx = arg;
@@ -1131,7 +1133,7 @@ static int __itf_table_update(struct interface_table *ctx)
 	if (rc < 0)
 		goto out;
 
-#ifndef SAM_LEGACY
+#if defined(CMM_4RD_SUPPORT) && !defined(SAM_LEGACY)
 	rc = __cmmGetMappingRule(ctx);
 	if (rc < 0)
 		cmm_print(DEBUG_ERROR, "%s::%d: __cmmGetMappingRule failed\n", __func__, __LINE__);
@@ -1800,13 +1802,13 @@ int cmmRtnlIfAddr(const struct sockaddr_nl *who, struct nlmsghdr *nlh, void *arg
 	struct rtattr *tb[IFA_MAX + 1];
 	char address[INET6_ADDRSTRLEN];
 	unsigned int *ipaddr;
-#ifndef SAM_LEGACY
+#if defined(CMM_4RD_SUPPORT) && !defined(SAM_LEGACY)
 	struct ip6_4rd_map_msg *mr;
 #endif
 
 	switch (nlh->nlmsg_type)
 	{
-#ifndef SAM_LEGACY
+#if defined(CMM_4RD_SUPPORT) && !defined(SAM_LEGACY)
 	case RTM_NEW4RD:
         case RTM_DEL4RD:
 		{
