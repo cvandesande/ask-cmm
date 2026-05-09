@@ -27,6 +27,7 @@ cmm_SOURCES = 	neighbor_resolution.c  \
 		ffbridge.c \
 		client_daemon.c  \
 		rtnl.c		\
+		rtnl_parse.c	\
 		module_rx.c  \
 		module_tx.c  \
 		module_qm.c  \
