@@ -339,6 +339,7 @@ int main (int argc, char ** argv)
 	//struct sched_param schedParams;
 	struct sigaction action;
 	int option,ii;
+	int foreground = 0;
 	char *buf;
 	int ret = 0;
 	int ch;
@@ -404,7 +405,7 @@ int main (int argc, char ** argv)
 	}
 
 	// Analyse the command line
-	while ((option = getopt(argc, argv, "c:f:n:hv")) != -1)
+	while ((option = getopt(argc, argv, "c:f:n:Fhv")) != -1)
 	{
 		switch (option)
 		{
@@ -426,6 +427,10 @@ int main (int argc, char ** argv)
 				}
 				break;
 
+			case 'F':	// Run in foreground (for a process supervisor like procd)
+				foreground = 1;
+				break;
+
 			case 'h':	// Print help
 				cmmHelp();
 				return 0;
@@ -445,8 +450,8 @@ int main (int argc, char ** argv)
 		goto err0;
 	}
 
-	// Daemonize the application
-	if(daemon(0, 1) == -1)
+	// Daemonize the application (unless supervised, e.g. by procd)
+	if(!foreground && daemon(0, 1) == -1)
 		goto err0;
 	//Ensure clean termination
 	action.sa_handler = sig_term_hdlr;
@@ -474,8 +479,9 @@ int main (int argc, char ** argv)
 	//sched_setscheduler(0, SCHED_FIFO, &schedParams);
 
 	//Init process does not set stdout on console
-	if(freopen("/dev/console", "w", stdout) == NULL)
-		goto err0;		
+	//(skip when foreground: leave stdout to the supervisor for logging)
+	if(!foreground && freopen("/dev/console", "w", stdout) == NULL)
+		goto err0;
 	sigemptyset(&block_mask);
 	sigaddset(&block_mask, SIGTERM);
 	sigaddset(&block_mask, SIGPIPE);
