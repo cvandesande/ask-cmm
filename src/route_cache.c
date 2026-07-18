@@ -699,6 +699,9 @@ static void __cmmCtTunnelRouteUpdate(FCI_CLIENT *fci_handle, struct ctTable *ctE
 	struct ct_route rt;
 	struct ct_route *ct_rt;
 	const char *dir_name;
+	/* __cmmRouteDeregister() below can drop the last reference to route
+	 * and free it, so route must not be dereferenced after that call. */
+	int route_invalid = route->flags & INVALID;
 
 	cmm_print(DEBUG_INFO, "%s\n", __func__);
 
@@ -712,7 +715,7 @@ static void __cmmCtTunnelRouteUpdate(FCI_CLIENT *fci_handle, struct ctTable *ctE
 		dir_name = "replier tunnel";
 	}
 
-	if (!(route->flags & INVALID))
+	if (!route_invalid)
 		rt.route = NULL;
 
 	if ((rt.fpp_route || rt.route) &&
@@ -722,7 +725,7 @@ static void __cmmCtTunnelRouteUpdate(FCI_CLIENT *fci_handle, struct ctTable *ctE
 		return;
 	}
 
-	if (route->flags & INVALID)
+	if (route_invalid)
 	{
 		if (dir == ORIGINATOR)
 		{
@@ -768,6 +771,9 @@ static void __cmmCtRouteUpdate(FCI_CLIENT *fci_handle, struct ctTable *ctEntry, 
 	const char *dir_name;
 	const char *tunnel_dir_name;
 	int tunnel_route_linked = 0;
+	/* __cmmRouteDeregister() below can drop the last reference to route
+	 * and free it, so route must not be dereferenced after that call. */
+	int route_invalid = route->flags & INVALID;
 
 	cmm_print(DEBUG_INFO, "%s\n", __func__);
 
@@ -820,7 +826,7 @@ static void __cmmCtRouteUpdate(FCI_CLIENT *fci_handle, struct ctTable *ctEntry, 
 		}
 	}
 
-	if (!(route->flags & INVALID))
+	if (!route_invalid)
 		rt.route = NULL;
 
 	if ((rt.fpp_route || rt.route) &&
@@ -830,7 +836,7 @@ static void __cmmCtRouteUpdate(FCI_CLIENT *fci_handle, struct ctTable *ctEntry, 
 		return;
 	}
 
-	if (route->flags & INVALID)
+	if (route_invalid)
 	{
 		if (dir == ORIGINATOR)
 		{
