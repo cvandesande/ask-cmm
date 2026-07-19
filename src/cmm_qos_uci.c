@@ -16,6 +16,15 @@
 #define CMMQOS_MAX_SHAPERS GEM_PORTS
 #define CMMQOS_RATE_MAX 10000000U
 #define CMMQOS_BUCKET_MAX 65535U
+/*
+ * The first product scope owns one CEETM channel for the sole configured
+ * port shaper.  CMM's CLI calls this "channel 1"; the FPP/CDX ABI is
+ * zero-based, so it is channel index 0.  Do not infer another free channel:
+ * CDX rejects assignments already owned by another port, which is the safe
+ * failure mode until multi-port ownership semantics are designed.
+ */
+#define CMMQOS_CHANNEL_CLI 1U
+#define CMMQOS_CHANNEL_INDEX (CMMQOS_CHANNEL_CLI - 1U)
 
 struct cmmqos_shaper {
 	char device[IFNAMSIZ];
@@ -121,10 +130,12 @@ static int cmmqos_validate(struct uci_package *package,
 	return CMMD_ERR_OK;
 }
 
-static int cmmqos_program(FCI_CLIENT *fci_handle, const struct cmmqos_shaper *shaper)
+static int cmmqos_program(FCI_CLIENT *fci_handle,
+		const struct cmmqos_shaper *shaper, const char **operation)
 {
 	fpp_qm_qos_enable_cmd_t qos;
 	fpp_qm_shaper_cfg_cmd_t config;
+	fpp_qm_chnl_assign_cmd_t assign;
 	int rc;
 
 	if (!shaper->enabled) {
@@ -132,13 +143,25 @@ static int cmmqos_program(FCI_CLIENT *fci_handle, const struct cmmqos_shaper *sh
 
 		memset(&reset, 0, sizeof(reset));
 		STR_TRUNC_COPY(reset.interface, shaper->device, sizeof(reset.interface));
+		*operation = "reset";
 		rc = fci_write(fci_handle, FPP_CMD_QM_RESET, sizeof(reset), (unsigned short *)&reset);
 		return rc;
 	}
 
+	/* CEETM refuses QoS enable until a channel is assigned to this port. */
+	memset(&assign, 0, sizeof(assign));
+	STR_TRUNC_COPY(assign.interface, shaper->device, sizeof(assign.interface));
+	assign.channel_num = CMMQOS_CHANNEL_INDEX;
+	*operation = "assign channel 1";
+	rc = fci_write(fci_handle, FPP_CMD_QM_CHNL_ASSIGN, sizeof(assign),
+		(unsigned short *)&assign);
+	if (rc != FPP_ERR_OK)
+		return rc;
+
 	memset(&qos, 0, sizeof(qos));
 	STR_TRUNC_COPY(qos.interface, shaper->device, sizeof(qos.interface));
 	qos.enable = 1;
+	*operation = "enable qos";
 	rc = fci_write(fci_handle, FPP_CMD_QM_QOSENABLE, sizeof(qos), (unsigned short *)&qos);
 	if (rc != FPP_ERR_OK)
 		return rc;
@@ -149,6 +172,7 @@ static int cmmqos_program(FCI_CLIENT *fci_handle, const struct cmmqos_shaper *sh
 	config.rate = shaper->rate;
 	config.bsize = shaper->bucketsize;
 	config.cfg_flags = PORT_SHAPER_CFG | SHAPER_CFG_VALID | RATE_VALID | BSIZE_VALID;
+	*operation = "configure port shaper";
 	return fci_write(fci_handle, FPP_CMD_QM_SHAPER_CFG, sizeof(config), (unsigned short *)&config);
 }
 
@@ -159,6 +183,7 @@ int cmmQmUciLoad(FCI_CLIENT *fci_handle)
 	struct cmmqos_shaper shapers[CMMQOS_MAX_SHAPERS];
 	size_t count;
 	size_t i;
+	const char *operation;
 	int rc;
 
 	ctx = uci_alloc_context();
@@ -175,9 +200,11 @@ int cmmQmUciLoad(FCI_CLIENT *fci_handle)
 	if (rc != CMMD_ERR_OK)
 		goto out;
 	for (i = 0; i < count; i++) {
-		rc = cmmqos_program(fci_handle, &shapers[i]);
+		operation = "unknown operation";
+		rc = cmmqos_program(fci_handle, &shapers[i], &operation);
 		if (rc != FPP_ERR_OK) {
-			cmm_print(DEBUG_ERROR, "cmmqos: FPP operation failed on %s (rc %d)\n", shapers[i].device, rc);
+			cmm_print(DEBUG_ERROR, "cmmqos: %s failed on %s (rc %d)\n",
+				operation, shapers[i].device, rc);
 			goto out;
 		}
 	}
