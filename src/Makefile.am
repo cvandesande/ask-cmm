@@ -31,6 +31,7 @@ cmm_SOURCES = 	neighbor_resolution.c  \
 		module_rx.c  \
 		module_tx.c  \
 		module_qm.c  \
+		cmm_qos_uci.c \
 		module_prf.c \
 		module_vlan.c \
 		module_macvlan.c \

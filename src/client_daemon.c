@@ -310,6 +310,8 @@ void cmmClientPrintHelp()
 									"\ttunnels: tunnel interfaces\n");
 
 	cmm_print(DEBUG_STDOUT, "\nCommand usage: { msp | dm | prf | tunnel | relay | vlan | pktcapture | icc | ipv4 |ipv6 } <options> \n");
+	cmm_print(DEBUG_STDOUT, "Command usage: reload qm-config\n"
+									"\tReload OpenWrt CMM QM port-shaper configuration\n");
 
 }
 
@@ -483,6 +485,17 @@ int cmmClientProcessCmd(char * command, int argc, char ** argv, daemon_handle_t 
 	// We nead at least 2 keywords to perform the parsing
 	if(cpt < 1)
 		goto help;
+	if (strcasecmp(keywords[0], "reload") == 0) {
+		if (cpt == 2 && strcasecmp(keywords[1], "qm-config") == 0) {
+			unsigned short rc;
+
+			rc = cmmQmUciReload();
+			if (rc != CMMD_ERR_OK)
+				cmm_print(DEBUG_CRIT, "cmmqos reload failed (rc %u)\n", rc);
+			return rc == CMMD_ERR_OK ? 0 : -1;
+		}
+		goto help;
+	}
 
 	/*
 	 * Check if first keyword is correct
@@ -1399,6 +1412,13 @@ static int cmmCommandParse(struct cmm_daemon *ctx, int function_code, u_int8_t *
 	case CMMD_CMD_SOCKET_UPDATE:
 	case CMMD_CMD_SOCKET_SHOW:
 		return socket_daemon(ctx->fci_handle, ctx->fci_key_handle, function_code, cmd_buf, cmd_len, res_buf, res_len);
+
+	case CMMD_CMD_QM_UCI_RELOAD:
+		if (cmd_len != 0)
+			return CMMD_ERR_WRONG_COMMAND_SIZE;
+		res_buf[0] = cmmQmUciLoad(ctx->fci_handle);
+		*res_len = sizeof(res_buf[0]);
+		return CMMD_ERR_OK;
 
 	case CMMD_CMD_VOICE_FILE_LOAD:
 		return voice_file_load(ctx->fci_handle, (cmmd_voice_file_load_cmd_t *)cmd_buf, res_buf, res_len);

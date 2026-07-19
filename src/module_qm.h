@@ -60,6 +60,10 @@ int cmmQmSecQueryProcess(char **keywords, int tabStart, daemon_handle_t daemon_h
 int qm_get_num(char **keywords, int *pcpt, uint32_t max_val, uint32_t *val, char *errmsg);
 #endif
 
-#endif
+/* OpenWrt-only UCI integration.  The implementation is a no-op unless CMM
+ * was configured with --enable-openwrt-uci-qos. */
+int cmmQmUciReload(void);
+int cmmQmUciLoad(FCI_CLIENT *fci_handle);
 
+#endif
 

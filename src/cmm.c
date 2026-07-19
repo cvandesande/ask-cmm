@@ -531,6 +531,12 @@ int main (int argc, char ** argv)
 	if (cmmCliInit(&globalConf.cli) < 0)
 		goto err3;
 
+	/* The reload request is handled by the daemon command thread, which owns
+	 * the FCI handle.  This also makes startup and explicit reload use exactly
+	 * the same UCI parsing and hardware-programming path. */
+	if (cmmQmUciReload() != CMMD_ERR_OK)
+		cmm_print(DEBUG_ERROR, "cmmqos: initial configuration was not applied\n");
+
 	/* If callback support is enabled, then CMM calls 3rd Party initialization function */
 	globalConf.third_part_data = cmm_third_part_init();
 

@@ -16,4 +16,16 @@ CFLAGS="$CFLAGS $LIBNFCONNTRACK_CFLAGS"
 CMM_LIBS="$LIBNFCONNTRACK_LIBS"
 AC_SUBST(CMM_LIBS)
 
+AC_ARG_ENABLE([openwrt-uci-qos],
+	AS_HELP_STRING([--enable-openwrt-uci-qos],
+		[enable the OpenWrt UCI-backed QM port-shaper loader]),
+	[], [enable_openwrt_uci_qos=no])
+
+AS_IF([test "x$enable_openwrt_uci_qos" = "xyes"], [
+	AC_CHECK_HEADERS([uci.h], [], [AC_MSG_ERROR([OpenWrt libuci headers are required])])
+	AC_CHECK_LIB([uci], [uci_alloc_context], [], [AC_MSG_ERROR([OpenWrt libuci is required])])
+	CFLAGS="$CFLAGS -DCMM_OPENWRT_UCI_QOS"
+	CMM_LIBS="$CMM_LIBS -luci"
+])
+
 AC_OUTPUT(Makefile src/Makefile)
